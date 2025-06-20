@@ -1,6 +1,11 @@
 import axios from 'axios';
+import toast from 'react-hot-toast';
 
 const API_BASE_URL = 'http://localhost:8000';
+
+// CHANGED: Added the secret API key. Make sure this value
+// EXACTLY matches the API_KEY in your backend's .env file.
+const API_KEY = 'your-super-secret-hackathon-key';
 
 // Create axios instance with default config
 const api = axios.create({
@@ -8,13 +13,18 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 10000,
+  // CHANGED: Increased timeout for slow AI requests
+  timeout: 60000,
 });
 
-// Request interceptor for adding auth tokens (if needed)
+// CHANGED: Modified the request interceptor to add the API Key.
+// This function will now run before every request and attach the key.
 api.interceptors.request.use(
   (config) => {
-    // Add auth token if available
+    // Add the API Key to the request headers
+    config.headers['X-API-Key'] = API_KEY;
+
+    // Keep the existing logic for auth tokens if you need it later
     const token = localStorage.getItem('authToken');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
@@ -26,11 +36,15 @@ api.interceptors.request.use(
   }
 );
 
-// Response interceptor for handling errors
+// Response interceptor for handling errors globally
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     console.error('API Error:', error.response?.data || error.message);
+    // Optional: Add a toast notification for authorization errors
+    if (error.response?.status === 401 || error.response?.status === 403) {
+      toast.error("Authorization failed. Please check your API keys and CORS setup.");
+    }
     return Promise.reject(error);
   }
 );
@@ -112,11 +126,10 @@ export const jobsAPI = {
   },
 
   // Match jobs for student
-  matchJobs: async (studentProfile, preferences = {}) => {
-    const response = await api.post('/jobs/match', {
-      student_profile: studentProfile,
-      preferences: preferences,
-    });
+  matchJobs: async (studentProfile) => {
+    // The original code passed a 'preferences' object which our backend doesn't use for this endpoint.
+    // We will just pass the student profile as the body.
+    const response = await api.post('/jobs/match', studentProfile);
     return response.data;
   },
 
