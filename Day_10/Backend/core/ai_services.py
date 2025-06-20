@@ -1,14 +1,14 @@
+# core/ai_services.py
+
 import os
 import traceback
 from typing import List, Dict
 
-from litellm import completion
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.docstore.document import Document
-from crewai import Agent, Task, Crew, Process, LLM
-
-from langchain_google_genai import HarmBlockThreshold, HarmCategory
+from crewai import Agent, Task, Crew, Process
+from crewai.llm import LLM
 
 from .config import settings
 from models.job import Job
@@ -21,16 +21,12 @@ class AIService:
         if not settings.GEMINI_API_KEY:
             raise ValueError("GEMINI_API_KEY not found in environment variables.")
         
-        os.environ["GOOGLE_API_KEY"] = settings.GEMINI_API_KEY
-
         self.llm = LLM(
-            model='gemini/gemini-2.0-flash',
+            model='gemini/gemini-1.5-flash-latest',
             api_key=settings.GEMINI_API_KEY
         )
 
-        # Change this line:
-        self.embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=settings.GEMINI_API_KEY) 
-        # NOT "google/embedding-001"
+        self.embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=settings.GEMINI_API_KEY)
         self.vector_store = None
 
     def index_jobs(self, jobs: List[Job]):
@@ -48,17 +44,79 @@ class AIService:
         self.vector_store = FAISS.from_documents(documents, self.embeddings)
         print(f"Successfully indexed {len(jobs)} jobs.")
 
-    def match_jobs(self, student_profile: StudentProfile, top_k: int = 5) -> List[Dict]:
-        """Finds the best job matches for a student using RAG."""
+    def create_profile_summary_with_agent(self, student_profile: StudentProfile) -> str:
+        """
+        Uses a CrewAI agent to analyze a student's full profile (including resume text)
+        and generate a rich, detailed summary for job matching.
+        """
+        
+        profile_understanding_agent = Agent(
+            role='AI Career Strategist for Students',
+            goal=(
+                "Analyze a student's complete profile, including form data, resume text, and LinkedIn info. "
+                "Synthesize this into a detailed, keyword-rich summary that highlights their skills, experiences, "
+                "and career aspirations to be used for high-quality job matching."
+            ),
+            backstory=(
+                "You are an expert AI career coach with a knack for seeing the hidden potential in every student. "
+                "You translate their diverse experiences into a powerful narrative that job-matching algorithms can understand."
+            ),
+            verbose=True,
+            allow_delegation=False,
+            llm=self.llm,
+        )
+
+        profile_data_for_agent = student_profile.model_dump_json(indent=2)
+
+        understanding_task = Task(
+            description=f"""
+            Analyze the following student profile JSON. Pay close attention to the 'skills', 'experience', and especially the 'resume_text'.
+            
+            Your mission is to generate a comprehensive, single-paragraph summary. This summary should:
+            1.  Start with the student's primary career objective or major.
+            2.  Weave in their key technical and soft skills.
+            3.  Mention specific projects or experiences from their resume.
+            4.  Incorporate their preferences for job types (e.g., 'internship', 'remote').
+            5.  Be rich with keywords that a job search engine would find valuable.
+
+            Here is the student's profile data:
+            ---
+            {profile_data_for_agent}
+            ---
+            """,
+            agent=profile_understanding_agent,
+            expected_output="A single, dense paragraph summarizing the student's professional profile and goals."
+        )
+
+        profile_crew = Crew(
+            agents=[profile_understanding_agent],
+            tasks=[understanding_task],
+            process=Process.sequential,
+            verbose=True
+        )
+
+        try:
+            summary_result = profile_crew.kickoff()
+            # CHANGED: Convert the CrewOutput object to a string before returning.
+            # This is the fix for the TypeError.
+            return str(summary_result)
+        except Exception as e:
+            print(f"Error during Profile Understanding Agent execution: {e}")
+            return (
+                f"Student Profile:\n"
+                f"- Skills: {', '.join(student_profile.skills)}\n"
+                f"- Experience: {student_profile.experience}\n"
+                f"- Desired Job Types: {', '.join(student_profile.jobTypes)}"
+            )
+
+    def match_jobs(self, student_profile: StudentProfile, top_k: int = 10) -> List[Dict]:
+        """Finds the best job matches for a student using a profile summary generated by an AI agent."""
         if not self.vector_store:
             return []
 
-        profile_summary = (
-            f"Student Profile:\n"
-            f"- Skills: {', '.join(student_profile.skills)}\n"
-            f"- Experience: {student_profile.experience}\n"
-            f"- Desired Job Types: {', '.join(student_profile.jobTypes)}"
-        )
+        print("Generating profile summary with AI agent...")
+        profile_summary = self.create_profile_summary_with_agent(student_profile)
+        print("Agent Summary for Matching:", profile_summary)
         
         results = self.vector_store.similarity_search_with_score(profile_summary, k=top_k)
 
@@ -152,7 +210,7 @@ class AIService:
 
         try:
             result = match_crew.kickoff()
-            return result
+            return str(result)
         except Exception as e:
             print("----------------- DETAILED ERROR TRACEBACK -----------------")
             traceback.print_exc()

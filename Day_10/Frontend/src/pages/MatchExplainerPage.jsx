@@ -77,7 +77,7 @@ const MatchExplainerPage = () => {
       {/* The 'prose' class from tailwind-typography is great for styling markdown */}
       <div className="bg-white p-8 rounded-lg shadow-md prose lg:prose-lg max-w-none">
         <ReactMarkdown >
-          {explanation.raw}
+          {explanation}
         </ReactMarkdown>
       </div>
 

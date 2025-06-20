@@ -3,8 +3,8 @@ import toast from 'react-hot-toast';
 
 const API_BASE_URL = 'http://localhost:8000';
 
-// CHANGED: Added the secret API key. Make sure this value
-// EXACTLY matches the API_KEY in your backend's .env file.
+// IMPORTANT: Make sure this value EXACTLY matches the API_KEY
+// in your backend's .env file.
 const API_KEY = 'your-super-secret-hackathon-key';
 
 // Create axios instance with default config
@@ -13,18 +13,16 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  // CHANGED: Increased timeout for slow AI requests
+  // Increased timeout for potentially slow AI agent requests
   timeout: 60000,
 });
 
-// CHANGED: Modified the request interceptor to add the API Key.
-// This function will now run before every request and attach the key.
+// Request interceptor to attach the API Key to every request
 api.interceptors.request.use(
   (config) => {
-    // Add the API Key to the request headers
     config.headers['X-API-Key'] = API_KEY;
 
-    // Keep the existing logic for auth tokens if you need it later
+    // This part is for potential future authentication with user logins
     const token = localStorage.getItem('authToken');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
@@ -41,7 +39,6 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     console.error('API Error:', error.response?.data || error.message);
-    // Optional: Add a toast notification for authorization errors
     if (error.response?.status === 401 || error.response?.status === 403) {
       toast.error("Authorization failed. Please check your API keys and CORS setup.");
     }
@@ -52,19 +49,18 @@ api.interceptors.response.use(
 // ==================== STUDENT PROFILE API ====================
 
 export const studentAPI = {
-  // Create or update student profile
+  // Create or update student profile with form data (including linkedin_url)
   createProfile: async (profileData) => {
     const response = await api.post('/students/profile', profileData);
     return response.data;
   },
 
-  // Upload resume
-  uploadResume: async (file, studentId = null) => {
+  // NEW: Function to upload the resume file
+  // This function matches the new endpoint you created on the backend.
+  uploadResume: async (file, studentId) => {
     const formData = new FormData();
     formData.append('file', file);
-    if (studentId) {
-      formData.append('student_id', studentId);
-    }
+    formData.append('student_id', studentId);
 
     const response = await api.post('/students/upload-resume', formData, {
       headers: {
@@ -86,14 +82,7 @@ export const studentAPI = {
 export const jobsAPI = {
   // Get jobs with filters
   getJobs: async (params = {}) => {
-    const queryParams = new URLSearchParams();
-    
-    Object.entries(params).forEach(([key, value]) => {
-      if (value !== null && value !== undefined && value !== '') {
-        queryParams.append(key, value);
-      }
-    });
-
+    const queryParams = new URLSearchParams(params);
     const response = await api.get(`/jobs?${queryParams.toString()}`);
     return response.data;
   },
@@ -113,22 +102,13 @@ export const jobsAPI = {
   // Search jobs
   searchJobs: async (query, filters = {}) => {
     const params = { query, ...filters };
-    const queryParams = new URLSearchParams();
-    
-    Object.entries(params).forEach(([key, value]) => {
-      if (value !== null && value !== undefined && value !== '') {
-        queryParams.append(key, value);
-      }
-    });
-
+    const queryParams = new URLSearchParams(params);
     const response = await api.get(`/jobs/search?${queryParams.toString()}`);
     return response.data;
   },
 
   // Match jobs for student
   matchJobs: async (studentProfile) => {
-    // The original code passed a 'preferences' object which our backend doesn't use for this endpoint.
-    // We will just pass the student profile as the body.
     const response = await api.post('/jobs/match', studentProfile);
     return response.data;
   },
@@ -139,7 +119,7 @@ export const jobsAPI = {
     return response.data;
   },
 
-  // Initialize mock data
+  // Initialize mock data (if you have this endpoint)
   initializeMockData: async () => {
     const response = await api.post('/jobs/initialize-mock-data');
     return response.data;
@@ -194,5 +174,5 @@ export const healthAPI = {
   },
 };
 
-// Export default api instance for custom requests
+// Export default api instance for any custom one-off requests
 export default api;

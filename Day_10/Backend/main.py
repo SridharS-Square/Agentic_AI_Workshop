@@ -20,7 +20,7 @@ app = FastAPI(
 # Set up CORS (Cross-Origin Resource Sharing)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"], # Your React app's URL
+    allow_origins=["*"], # Your React app's URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
