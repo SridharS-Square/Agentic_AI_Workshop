@@ -1,76 +1,148 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 from typing import List
+from pydantic import BaseModel, Field
 
-from models.job import Job
-from models.student import StudentProfile
+from models.job import Job, JobMatchResponse
 from core.ai_services import AIService
-from core.security import get_api_key
-from data.store import db, get_job_by_id
-
-# Import the dependency function from its new, neutral location
+from core.auth import current_active_user
+from models.user import User
+from models.student import StudentProfile, StudentProfileRead, TrackedJob
+from core.job_search import search_realtime_jobs
 from core.dependencies import get_ai_service
 
-router = APIRouter()
+# Using a different variable name for the router to avoid conflicts
+jobs_router = APIRouter()
 
-@router.get("/", response_model=List[Job])
-def get_all_jobs():
-    """Returns all jobs from the mock database."""
-    return db["jobs"]
+class JobSearchRequest(BaseModel):
+    job_query: str
+    location: str
 
-@router.post("/match", response_model=List[dict], dependencies=[Depends(get_api_key)])
-def match_jobs_for_student(
-    student_profile: StudentProfile,
-    ai_service: AIService = Depends(get_ai_service)
+class ExplainMatchRequest(BaseModel):
+    job_details: Job
+
+class TrackJobRequest(BaseModel):
+    job: Job
+
+class UpdateStatusRequest(BaseModel):
+    status: str
+
+
+@jobs_router.post("/match", response_model=List[JobMatchResponse])
+async def match_jobs_for_current_user(
+    request: JobSearchRequest,
+    user: User = Depends(current_active_user),
+    ai_service: AIService = Depends(get_ai_service),
 ):
     """
-    Finds and returns jobs that match the student's profile using the RAG pipeline.
-    This endpoint is secured with an API key.
+    Fetches live jobs and filters out any that the user is already tracking,
+    then returns the remaining matches.
     """
-    if not ai_service or not ai_service.vector_store:
-        raise HTTPException(status_code=503, detail="AI Service not initialized or ready.")
+    profile = await StudentProfile.find_one(StudentProfile.user_id == user.id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Please complete your profile before matching jobs.")
+
+    # Fetch live jobs from the external API
+    live_jobs = search_realtime_jobs(query=request.job_query, location=request.location)
+    if not live_jobs:
+        raise HTTPException(status_code=404, detail="Could not find any jobs for the given query.")
+
+    tracked_jobs_cursor = TrackedJob.find(TrackedJob.user_id == user.id)
+    tracked_jobs_identifiers = {(job.title, job.company) async for job in tracked_jobs_cursor}
     
-    matches = ai_service.match_jobs(student_profile)
+    # Filter the live jobs list
+    untracked_live_jobs = [
+        job for job in live_jobs 
+        if (job.title, job.company) not in tracked_jobs_identifiers
+    ]
+    
+    if not untracked_live_jobs:
+        return [] # Return an empty list if all found jobs are already tracked
+
+    live_jobs_dict = {job.id: job for job in untracked_live_jobs}
+    vector_store = ai_service.create_vector_store_from_jobs(untracked_live_jobs)
+    
+    if not vector_store:
+        raise HTTPException(status_code=500, detail="Failed to create AI index for jobs.")
+
+    profile_for_ai = StudentProfileRead.from_orm(profile)
+    profile_summary = ai_service.create_profile_summary(profile_for_ai)
+    results = vector_store.similarity_search_with_score(profile_summary, k=10)
     
     matched_jobs_details = []
-    for match in matches:
-        job = get_job_by_id(match["job_id"])
+    for doc, score in results:
+        job_id = doc.metadata.get("job_id")
+        job = live_jobs_dict.get(job_id)
         if job:
-            job_with_match = job.dict()
-            job_with_match["match"] = f"{match['match_score']}%"
-            matched_jobs_details.append(job_with_match)
+            response_data = job.model_dump()
+            response_data["match_score"] = round((1 - score) * 100)
+            matched_jobs_details.append(response_data)
 
     return matched_jobs_details
 
 
-@router.post("/{job_id}/explain-match", response_model=dict, dependencies=[Depends(get_api_key)])
-def explain_job_match(
-    job_id: int,
-    student_profile: StudentProfile,
-    ai_service: AIService = Depends(get_ai_service)
+@jobs_router.post("/explain-match", response_model=dict)
+async def explain_job_match(
+    request: ExplainMatchRequest,
+    user: User = Depends(current_active_user),
+    ai_service: AIService = Depends(get_ai_service),
 ):
     """
-    Uses the CrewAI agentic workflow to generate a detailed explanation for a job match.
-    This endpoint is secured with an API key.
+    Generates a detailed explanation for a specific job match against the current user.
     """
-    job = get_job_by_id(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    if not ai_service:
-        raise HTTPException(status_code=503, detail="AI Service not initialized.")
-
-    try:
-        explanation = ai_service.explain_match(student_profile, job)
-        return {"explanation": explanation}
-    except Exception as e:
-        print(f"Error during CrewAI execution: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate explanation: {e}")
+    profile = await StudentProfile.find_one(StudentProfile.user_id == user.id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="User profile not found.")
+        
+    profile_for_ai = StudentProfileRead.from_orm(profile)
+    explanation = ai_service.explain_match(profile_for_ai, request.job_details)
+    return {"explanation": explanation}
 
 
-@router.get("/{job_id}", response_model=Job)
-def get_job_details(job_id: int):
-    """Returns the details for a specific job."""
-    job = get_job_by_id(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return job
+@jobs_router.post("/track", response_model=TrackedJob, status_code=201)
+async def track_job(
+    request: TrackJobRequest,
+    user: User = Depends(current_active_user),
+):
+    """Saves a job to the user's tracked jobs list."""
+    job_data = request.job.dict()
+    
+    # Check if this job is already being tracked by the user
+    existing_tracked_job = await TrackedJob.find_one(
+        TrackedJob.user_id == user.id,
+        TrackedJob.title == job_data["title"],
+        TrackedJob.company == job_data["company"]
+    )
+    if existing_tracked_job:
+        raise HTTPException(status_code=409, detail="This job is already being tracked.")
+    
+    if 'id' in job_data:
+        del job_data['id']
+
+    # Create a new TrackedJob document
+    new_tracked_job = TrackedJob(**job_data, user_id=user.id)
+    await new_tracked_job.insert()
+    return new_tracked_job
+
+
+@jobs_router.get("/track", response_model=List[TrackedJob])
+async def get_tracked_jobs(user: User = Depends(current_active_user)):
+    """Retrieves all jobs the current user is tracking."""
+    tracked_jobs = await TrackedJob.find(TrackedJob.user_id == user.id).to_list()
+    return tracked_jobs
+
+
+@jobs_router.put("/track/{job_id}", response_model=TrackedJob)
+async def update_tracked_job_status(
+    job_id: str,
+    request: UpdateStatusRequest,
+    user: User = Depends(current_active_user),
+):
+    """Updates the status of a specific tracked job."""
+    tracked_job = await TrackedJob.get(job_id)
+
+    if not tracked_job or tracked_job.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Tracked job not found.")
+    
+    tracked_job.status = request.status
+    await tracked_job.save()
+    return tracked_job

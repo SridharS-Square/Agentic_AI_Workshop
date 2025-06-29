@@ -1,102 +1,123 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { useStudent } from '../context/StudentContext';
+import React, { useState, useEffect } from 'react';
+import { useAuth } from '../context/AuthContext';
+import api from '../services/api';
+import toast from 'react-hot-toast';
+import { ArrowRight, Sparkles, Search } from 'lucide-react';
+import { marked } from 'marked';
 
 const JobsPage = () => {
-  const { state } = useStudent();
-  const { matchedJobs, loading } = state;
+    const { profile, matchedJobs, setMatchedJobs } = useAuth();
+    console.log('matchedJobs: ', matchedJobs);
+    const [loading, setLoading] = useState(false);
+    // Default search query based on user's profile, if available
+    const [searchQuery, setSearchQuery] = useState({ 
+        job_query: profile?.skills?.[0] || 'Software Developer', 
+        location: 'India' 
+    });
+    const [explanation, setExplanation] = useState({});
+    const [explainingJobId, setExplainingJobId] = useState(null);
 
-  const [filters, setFilters] = useState({ search: '' });
+    const fetchJobs = async (query) => {
+        if (!query.job_query || !query.location) {
+            toast.error("Please enter both a job title and location.");
+            return;
+        }
+        setLoading(true);
+        setMatchedJobs([]); // Clear previous results
+        setExplanation({}); // Clear previous explanations
+        try {
+            const response = await api.post('/jobs/match', query);
+            setMatchedJobs(response.data);
+            if (response.data.length === 0) {
+                toast.success("Search complete. No matches found for this query.");
+            }
+        } catch (error) {
+            console.error("Failed to fetch jobs:", error);
+            toast.error(error.response?.data?.detail || "Could not fetch jobs.");
+            setMatchedJobs([]);
+        } finally {
+            setLoading(false);
+        }
+    };
 
-  const filteredJobs = (matchedJobs || []).filter(job => {
+    // Automatically fetch jobs when the page loads for the first time
+    useEffect(() => {
+        if (matchedJobs?.length === 0) {
+            fetchJobs(searchQuery);
+        }
+    }, []);
+
+    const handleExplainMatch = async (job) => {
+        if (explanation[job.id]) {
+            setExplanation(prev => ({ ...prev, [job.id]: null }));
+            return;
+        }
+        setExplainingJobId(job.id);
+        const toastId = toast.loading('AI agent is analyzing the match...');
+        try {
+            const response = await api.post('/jobs/explain-match', { job_details: job });
+            // Use marked to parse the markdown response into HTML
+            const htmlExplanation = marked.parse(response.data.explanation);
+            setExplanation(prev => ({ ...prev, [job.id]: htmlExplanation }));
+            toast.success('Explanation generated!', { id: toastId });
+        } catch(error) {
+          console.log('error: ', error);
+            toast.error("Could not generate explanation.", { id: toastId });
+        } finally {
+            setExplainingJobId(null);
+        }
+    }
+    
+    const handleSearch = (e) => { e.preventDefault(); fetchJobs(searchQuery); };
+
     return (
-      job.title.toLowerCase().includes(filters.search.toLowerCase()) ||
-      job.company.toLowerCase().includes(filters.search.toLowerCase())
-    );
-  });
-
-  return (
-    <div className="max-w-6xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">Your Top Job Matches</h1>
-        <p className="text-gray-600">These jobs have been matched to your profile by our AI.</p>
-      </div>
-
-      <div className="bg-white p-6 rounded-lg shadow-sm mb-8">
-        <div className="grid md:grid-cols-4 gap-4">
-          <div className="md:col-span-3">
-            <input
-              type="text"
-              placeholder="Search in your matched jobs..."
-              value={filters.search}
-              onChange={(e) => setFilters({...filters, search: e.target.value})}
-              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-          </div>
-        </div>
-      </div>
-
-      {loading ? (
-        <div className="text-center p-12">
-            <p className="text-xl font-semibold animate-pulse">Finding your job matches...</p>
-        </div>
-      ) : filteredJobs.length > 0 ? (
-        <div className="space-y-6">
-          {filteredJobs.map(job => (
-            <div key={job.id} className="bg-white p-6 rounded-lg shadow-sm hover:shadow-md transition-shadow">
-              <div className="flex justify-between items-start mb-4">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-2">
-                    <h2 className="text-xl font-semibold text-gray-900">{job.title}</h2>
-                    <span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-bold">
-                      {job.match} Match
-                    </span>
-                  </div>
-                  <div className="flex items-center flex-wrap gap-x-4 gap-y-1 text-gray-600 mb-3">
-                    <span className="font-medium">{job.company}</span>
-                    <span>•</span>
-                    <span>{job.location}</span>
-                    <span>•</span>
-                    <span>{job.type}</span>
-                    {job.salary && <><span>•</span><span className="font-medium text-green-600">{job.salary}</span></>}
-                  </div>
-                  <p className="text-gray-700 mb-3 text-sm">{job.description}</p>
-                  <div className="flex flex-wrap gap-2 mb-3">
-                    {job.requirements.map((req, idx) => (
-                      <span key={idx} className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-sm">
-                        {req}
-                      </span>
-                    ))}
-                  </div>
-                  <p className="text-sm text-gray-500">Posted {job.posted}</p>
-                </div>
-                <div className="flex flex-col gap-2 ml-6">
-                  <Link
-                    to={`/match-explainer/${job.id}`}
-                    className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-center"
-                  >
-                    Explain Match
-                  </Link>
-                  <button className="border border-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition-colors">
-                    Save Job
-                  </button>
-                </div>
-              </div>
+        <div className="max-w-6xl mx-auto">
+            <div className="mb-8">
+                <h1 className="text-3xl font-bold text-gray-900 mb-2">Find Your Next Job</h1>
+                <p className="text-gray-600">Enter a job title and location to get real-time, AI-powered matches based on your profile.</p>
             </div>
-          ))}
+            <form onSubmit={handleSearch} className="bg-white p-6 rounded-lg shadow-sm mb-8 flex flex-col md:flex-row gap-4 items-center border">
+                <input type="text" placeholder="Job title (e.g., 'React Developer')" value={searchQuery.job_query} onChange={(e) => setSearchQuery({...searchQuery, job_query: e.target.value})} className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"/>
+                <input type="text" placeholder="Location (e.g., 'New York')" value={searchQuery.location} onChange={(e) => setSearchQuery({...searchQuery, location: e.target.value})} className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"/>
+                <button type="submit" disabled={loading} className="w-full md:w-auto bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700 disabled:bg-blue-300 flex items-center justify-center gap-2">
+                    <Search size={18} />
+                    {loading ? 'Searching...' : 'Search'}
+                </button>
+            </form>
+            {loading ? (
+                <div className="text-center p-12"><p className="text-xl font-semibold animate-pulse text-blue-600">AI is searching for your job matches...</p></div>
+            ) : matchedJobs?.length > 0 ? (
+                <div className="space-y-6">
+                {matchedJobs.map(job => (
+                    <div key={job.id} className="bg-white p-6 rounded-lg shadow-sm hover:shadow-md transition-shadow border">
+                        <div className="flex justify-between items-start mb-4">
+                            <div className="flex-1">
+                                <h2 className="text-xl font-semibold text-gray-900">{job.title}</h2>
+                                <div className="flex items-center flex-wrap gap-x-4 gap-y-1 text-gray-600 my-2"><span>{job.company}</span><span>•</span><span>{job.location}</span><span>•</span><span>{job.type}</span></div>
+                            </div>
+                            <div className="flex items-center gap-4 ml-6 flex-shrink-0">
+                                <span className={`text-sm font-bold px-3 py-1 rounded-full ${job.match_score > 75 ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>{job.match_score}% Match</span>
+                                <button onClick={() => handleExplainMatch(job)} disabled={explainingJobId === job.id} className="bg-blue-100 text-blue-700 px-4 py-2 rounded-lg hover:bg-blue-200 text-sm disabled:opacity-50 flex items-center gap-2">
+                                    <Sparkles size={16} />
+                                    {explainingJobId === job.id ? 'Analyzing...' : (explanation[job.id] ? 'Hide' : 'Explain')}
+                                </button>
+                                {job.apply_link && <a href={job.apply_link} target="_blank" rel="noopener noreferrer" className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 text-sm flex items-center gap-2">Apply<ArrowRight size={16}/></a>}
+                            </div>
+                        </div>
+                        {explanation[job.id] && (
+                           <div className="mt-4 pt-4 border-t prose prose-sm max-w-none text-gray-700" dangerouslySetInnerHTML={{ __html: explanation[job.id] }} />
+                        )}
+                    </div>
+                ))}
+                </div>
+            ) : (
+                <div className="text-center p-8 bg-white rounded-lg shadow-sm border">
+                    <h3 className="text-xl font-semibold text-gray-900">Start Your Search</h3>
+                    <p className="text-gray-600 mt-2">No jobs found for the last search. Enter a new query to find jobs that match your profile.</p>
+                </div>
+            )}
         </div>
-      ) : (
-        <div className="text-center p-8 bg-white rounded-lg shadow-sm">
-            <div className="text-5xl mb-4">🤷</div>
-            <h3 className="text-xl font-semibold text-gray-900">No Jobs Found</h3>
-            <p className="text-gray-600 mt-2">We couldn't find any jobs matching your profile yet. Try updating your skills!</p>
-            <Link to="/profile" className="mt-4 inline-block bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700">
-                Update Profile
-            </Link>
-        </div>
-      )}
-    </div>
-  );
+    );
 };
 
 export default JobsPage;

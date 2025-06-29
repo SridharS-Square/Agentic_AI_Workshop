@@ -179,3 +179,4 @@ pdfplumber
 python-docx
 requests-html
 lxml_html_clean
+fastapi-users[beanie]

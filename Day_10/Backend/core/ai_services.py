@@ -1,36 +1,35 @@
-# core/ai_services.py
-
 import os
-import traceback
 from typing import List, Dict
 
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_google_genai import GoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.docstore.document import Document
-from crewai import Agent, Task, Crew, Process
-from crewai.llm import LLM
+from langchain.prompts import PromptTemplate
 
-from .config import settings
+from core.config import settings
 from models.job import Job
-from models.student import StudentProfile
+from models.student import StudentProfileRead
+
 
 class AIService:
     def __init__(self):
-        os.environ["OPENAI_API_KEY"] = "NA" 
-        
         if not settings.GEMINI_API_KEY:
             raise ValueError("GEMINI_API_KEY not found in environment variables.")
         
-        self.llm = LLM(
-            model='gemini/gemini-1.5-flash-latest',
-            api_key=settings.GEMINI_API_KEY
+        self.llm = GoogleGenerativeAI(
+            model='gemini-2.0-flash-lite',
+            google_api_key=settings.GEMINI_API_KEY
         )
 
-        self.embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=settings.GEMINI_API_KEY)
-        self.vector_store = None
+        self.embeddings = GoogleGenerativeAIEmbeddings(
+            model="models/embedding-001", 
+            google_api_key=settings.GEMINI_API_KEY
+        )
 
-    def index_jobs(self, jobs: List[Job]):
-        """Creates a FAISS vector store from a list of jobs."""
+    def create_vector_store_from_jobs(self, jobs: List[Job]) -> FAISS:
+        """
+        Creates a temporary FAISS vector store from a list of jobs for a single request.
+        """
         documents = []
         for job in jobs:
             content = f"Title: {job.title}\nCompany: {job.company}\nDescription: {job.description}\nRequirements: {', '.join(job.requirements)}"
@@ -38,181 +37,54 @@ class AIService:
             documents.append(doc)
         
         if not documents:
-            print("No jobs to index.")
-            return
+            return None
 
-        self.vector_store = FAISS.from_documents(documents, self.embeddings)
-        print(f"Successfully indexed {len(jobs)} jobs.")
+        return FAISS.from_documents(documents, self.embeddings)
 
-    def create_profile_summary_with_agent(self, student_profile: StudentProfile) -> str:
-        """
-        Uses a CrewAI agent to analyze a student's full profile (including resume text)
-        and generate a rich, detailed summary for job matching.
-        """
-        
-        profile_understanding_agent = Agent(
-            role='AI Career Strategist for Students',
-            goal=(
-                "Analyze a student's complete profile, including form data, resume text, and LinkedIn info. "
-                "Synthesize this into a detailed, keyword-rich summary that highlights their skills, experiences, "
-                "and career aspirations to be used for high-quality job matching."
-            ),
-            backstory=(
-                "You are an expert AI career coach with a knack for seeing the hidden potential in every student. "
-                "You translate their diverse experiences into a powerful narrative that job-matching algorithms can understand."
-            ),
-            verbose=True,
-            allow_delegation=False,
-            llm=self.llm,
+    def create_profile_summary(self, student_profile: StudentProfileRead) -> str:
+        """Generates a keyword-rich summary of a student's profile using LCEL."""
+        prompt_template = PromptTemplate(
+            input_variables=["profile_data"],
+            template="""
+            Analyze the following student profile JSON. Pay close attention to 'skills', 'experience', and especially the 'resume_text'.
+            Your mission is to generate a comprehensive, single-paragraph summary rich with keywords that a job search engine would find valuable. This summary should weave together their key skills, experiences, and career aspirations.
+            Student Profile Data: --- {profile_data} ---
+            Rich Summary:
+            """
         )
+        summary_chain = prompt_template | self.llm
+        profile_data_str = student_profile.model_dump_json(indent=2)
+        summary = summary_chain.invoke({"profile_data": profile_data_str})
+        return summary
 
-        profile_data_for_agent = student_profile.model_dump_json(indent=2)
+    def explain_match(self, student_profile: StudentProfileRead, job: Job) -> str:
+        """Generates a detailed explanation for a job match, including a gap analysis."""
+        prompt = PromptTemplate(
+            input_variables=["profile_data", "job_data"],
+            template="""
+            You are an expert Career Advisor. Your task is to write a compelling and honest analysis of a job match.
+            Analyze the provided student profile and the job details, then generate a response in Markdown format.
 
-        understanding_task = Task(
-            description=f"""
-            Analyze the following student profile JSON. Pay close attention to the 'skills', 'experience', and especially the 'resume_text'.
-            
-            Your mission is to generate a comprehensive, single-paragraph summary. This summary should:
-            1.  Start with the student's primary career objective or major.
-            2.  Weave in their key technical and soft skills.
-            3.  Mention specific projects or experiences from their resume.
-            4.  Incorporate their preferences for job types (e.g., 'internship', 'remote').
-            5.  Be rich with keywords that a job search engine would find valuable.
-
-            Here is the student's profile data:
+            Here is the student's profile:
             ---
-            {profile_data_for_agent}
+            {profile_data}
             ---
-            """,
-            agent=profile_understanding_agent,
-            expected_output="A single, dense paragraph summarizing the student's professional profile and goals."
+
+            Here are the job details:
+            ---
+            {job_data}
+            ---
+
+            Now, generate the analysis with the following sections:
+            1.  **Overall Summary:** A confident, one-sentence summary of the match, acknowledging both strengths and weaknesses.
+            2.  **Strengths & Synergies:** A bulleted list detailing how the student's skills and experiences *positively align* with the job requirements. Be specific.
+            3.  **Bridging the Gap (The Missing Percentage):** This is the most important section. Analyze the job's core requirements and explicitly list the key skills, technologies, or experience levels that are mentioned in the job description but are *missing* from the student's profile. This section should explain why the match score isn't 100%.
+            4.  **Actionable Advice:** Based on the gap analysis, suggest 1-2 concrete steps the student could take to become a stronger candidate for this type of role in the future (e.g., "Learn technology X," "Build a project using Y").
+            """
         )
-
-        profile_crew = Crew(
-            agents=[profile_understanding_agent],
-            tasks=[understanding_task],
-            process=Process.sequential,
-            verbose=True
-        )
-
-        try:
-            summary_result = profile_crew.kickoff()
-            # CHANGED: Convert the CrewOutput object to a string before returning.
-            # This is the fix for the TypeError.
-            return str(summary_result)
-        except Exception as e:
-            print(f"Error during Profile Understanding Agent execution: {e}")
-            return (
-                f"Student Profile:\n"
-                f"- Skills: {', '.join(student_profile.skills)}\n"
-                f"- Experience: {student_profile.experience}\n"
-                f"- Desired Job Types: {', '.join(student_profile.jobTypes)}"
-            )
-
-    def match_jobs(self, student_profile: StudentProfile, top_k: int = 10) -> List[Dict]:
-        """Finds the best job matches for a student using a profile summary generated by an AI agent."""
-        if not self.vector_store:
-            return []
-
-        print("Generating profile summary with AI agent...")
-        profile_summary = self.create_profile_summary_with_agent(student_profile)
-        print("Agent Summary for Matching:", profile_summary)
-        
-        results = self.vector_store.similarity_search_with_score(profile_summary, k=top_k)
-
-        matched_jobs = []
-        for doc, score in results:
-            job_id = doc.metadata.get("job_id")
-            if job_id:
-                match_percentage = round((1 - score) * 100)
-                matched_jobs.append({"job_id": job_id, "match_score": max(0, min(100, match_percentage))})
-        
-        return matched_jobs
-
-    def explain_match(self, student_profile: StudentProfile, job: Job) -> str:
-        """Generates a detailed explanation for a job match using CrewAI."""
-        
-        profile_summary = f"""
-        **Student Profile:**
-        - Name: {student_profile.name}
-        - Major: {student_profile.major}
-        - Skills: {', '.join(student_profile.skills)}
-        - Experience: {student_profile.experience}
-        - Preferred Job Types: {', '.join(student_profile.jobTypes)}
-        """
-
-        job_details = f"""
-        **Job Details:**
-        - Title: {job.title} at {job.company}
-        - Description: {job.description}
-        - Requirements: {', '.join(job.requirements)}
-        """
-
-        profile_analyst = Agent(
-            role='Student Profile Analyst',
-            goal=f'Analyze the provided student profile and extract key strengths, skills, and career interests.',
-            backstory='An expert career coach who excels at understanding a student\'s potential from their profile.',
-            verbose=False,
-            allow_delegation=False,
-            llm=self.llm
-        )
-
-        job_scrutinizer = Agent(
-            role='Job Description Scrutinizer',
-            goal='Dissect the job description to identify the most critical requirements, skills, and company culture hints.',
-            backstory='A seasoned recruiter who can read between the lines of any job posting.',
-            verbose=False,
-            allow_delegation=False,
-            llm=self.llm
-        )
-
-        match_synthesizer = Agent(
-            role='Match Synthesizer & Career Advisor',
-            goal='Create a compelling, structured, and encouraging explanation of the match between the student and the job. The output must be in Markdown format.',
-            backstory='A persuasive career advisor who helps students see their potential and understand why an opportunity is right for them.',
-            verbose=True,
-            allow_delegation=False,
-            llm=self.llm
-        )
-        
-        task1 = Task(
-            description=f'Analyze this student profile and summarize their top 5 key qualifications and career goals.\n\nProfile:\n{profile_summary}',
-            agent=profile_analyst,
-            expected_output="A bulleted list of the student's top 5 qualifications and career goals."
-        )
-
-        task2 = Task(
-            description=f'Analyze this job posting and identify the top 5 essential requirements and skills needed for the role.\n\nJob Posting:\n{job_details}',
-            agent=job_scrutinizer,
-            expected_output="A bulleted list of the job's top 5 requirements."
-        )
-
-        task3 = Task(
-            description=(
-                'Using the analyses from the other agents, synthesize a final match explanation. '
-                'The explanation should be structured in Markdown with the following sections:\n'
-                '1. **Overall Match Score & Summary:** Give a confident, one-sentence summary of why this is a strong match.\n'
-                '2. **Strengths & Synergies:** A bulleted list detailing how the student\'s skills and experience align directly with the job requirements. Be specific.\n'
-                '3. **Areas for Growth:** Gently point out 1-2 areas where the student might need to learn more, framing it as an opportunity.\n'
-                '4. **Suggested Talking Points for an Interview:** Provide 2-3 specific points the student could mention in an interview to connect their experience to the job.'
-            ),
-            agent=match_synthesizer,
-            context=[task1, task2],
-            expected_output="A well-formatted Markdown document with the specified sections."
-        )
-        
-        match_crew = Crew(
-            agents=[profile_analyst, job_scrutinizer, match_synthesizer],
-            tasks=[task1, task2, task3],
-            process=Process.sequential,
-            verbose=True
-        )
-
-        try:
-            result = match_crew.kickoff()
-            return str(result)
-        except Exception as e:
-            print("----------------- DETAILED ERROR TRACEBACK -----------------")
-            traceback.print_exc()
-            print("-----------------------------------------------------------")
-            raise e
+        explanation_chain = prompt | self.llm
+        profile_data_str = student_profile.model_dump_json(indent=2)
+        job_data_str = job.model_dump_json(indent=2)
+        explanation = explanation_chain.invoke({"profile_data": profile_data_str, "job_data": job_data_str})
+        return explanation
+    
