@@ -16,9 +16,6 @@ class UserManager(BaseUserManager[User, PydanticObjectId]):
     reset_password_token_secret = SECRET
     verification_token_secret = SECRET
 
-    # --- THIS IS THE FIX ---
-    # This method is required by fastapi-users to correctly handle
-    # the PydanticObjectId from MongoDB.
     def parse_id(self, id: str) -> PydanticObjectId:
         return PydanticObjectId(id)
 
@@ -28,7 +25,7 @@ class UserManager(BaseUserManager[User, PydanticObjectId]):
         It creates a corresponding blank StudentProfile for the new user.
         """
         print(f"User {user.id} has registered.")
-        new_profile = StudentProfile(user_id=user.id, name=user.email) # Use email as default name
+        new_profile = StudentProfile(user_id=user.id, name=user.email)
         await new_profile.insert()
         print(f"Created blank profile for user {user.id}")
 

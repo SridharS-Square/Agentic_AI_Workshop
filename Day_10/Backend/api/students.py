@@ -34,7 +34,7 @@ async def update_user_profile(
     profile.major = profile_data.major
     profile.skills = profile_data.skills
     profile.experience = profile_data.experience
-    profile.job_types = profile_data.job_types  # This now matches the Pydantic field name
+    profile.job_types = profile_data.job_types
     profile.linkedin_url = profile_data.linkedin_url
         
     await profile.save()

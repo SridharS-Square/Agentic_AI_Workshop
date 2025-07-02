@@ -14,10 +14,10 @@ function Navbar() {
   };
 
   const navItems = [
+    { path: '/profile', label: 'My Profile' },
+    { path: '/jobs', label: 'Find Jobs' },
     { path: '/dashboard', label: 'Dashboard' },
     { path: '/applications', label: 'My Tracked Jobs'},
-    { path: '/jobs', label: 'Find Jobs' },
-    { path: '/profile', label: 'My Profile' },
   ];
 
   return (

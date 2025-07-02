@@ -17,7 +17,7 @@ const MatchExplainerPage = () => {
   useEffect(() => {
     // Find the job from the context's matchedJobs list
     const currentJob = matchedJobs.find(j => j.id.toString() === jobId);
-    
+
     if (currentJob) {
       setJob(currentJob);
       fetchExplanation(currentJob);
@@ -71,27 +71,27 @@ const MatchExplainerPage = () => {
           Back to All Matches
         </Link>
       </div>
-      
+
       <div className="bg-white p-8 rounded-lg shadow-lg border">
         <div className="border-b pb-6 mb-6">
-            <div className="flex justify-between items-center">
-                <h1 className="text-3xl font-bold text-gray-900">{job.title}</h1>
-                <span className={`text-lg font-bold px-4 py-2 rounded-full ${job.match_score > 75 ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
-                    {job.match_score}% Match
-                </span>
-            </div>
-            <p className="text-gray-600 mt-2">{job.company} • {job.location}</p>
+          <div className="flex justify-between items-center">
+            <h1 className="text-3xl font-bold text-gray-900">{job.title}</h1>
+            <span className={`text-lg font-bold px-4 py-2 rounded-full ${job.match_score > 75 ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
+              {job.match_score}% Match
+            </span>
+          </div>
+          <p className="text-gray-600 mt-2">{job.company} • {job.location}</p>
         </div>
-        
+
         <div>
           <h2 className="text-2xl font-semibold mb-4 text-gray-800 flex items-center gap-2">
-            <Sparkles className="text-blue-500"/>
+            <Sparkles className="text-blue-500" />
             AI-Powered Match Analysis
           </h2>
           {explanation ? (
-            <div 
+            <div
               className="prose prose-lg max-w-none text-gray-700"
-              dangerouslySetInnerHTML={{ __html: explanation.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }} 
+              dangerouslySetInnerHTML={{ __html: explanation.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>') }}
             />
           ) : (
             <p className="text-gray-500">Could not load the AI explanation for this job match.</p>

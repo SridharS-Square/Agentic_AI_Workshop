@@ -16,7 +16,7 @@ const LoginPage = () => {
     try {
       await login(email, password);
       toast.success('Welcome back!', { id: toastId });
-      navigate('/dashboard'); // Redirect to dashboard after successful login
+      navigate('/profile');
     } catch (error) {
       console.error('Login failed:', error);
       const errorMessage = error.response?.data?.detail || 'Login failed. Please check your credentials.';

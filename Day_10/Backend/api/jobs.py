@@ -56,7 +56,7 @@ async def match_jobs_for_current_user(
     ]
     
     if not untracked_live_jobs:
-        return [] # Return an empty list if all found jobs are already tracked
+        return [] 
 
     live_jobs_dict = {job.id: job for job in untracked_live_jobs}
     vector_store = ai_service.create_vector_store_from_jobs(untracked_live_jobs)

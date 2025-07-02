@@ -7,11 +7,9 @@ import { marked } from 'marked';
 
 const JobsPage = () => {
     const { profile, matchedJobs, setMatchedJobs } = useAuth();
-    console.log('matchedJobs: ', matchedJobs);
     const [loading, setLoading] = useState(false);
-    // Default search query based on user's profile, if available
     const [searchQuery, setSearchQuery] = useState({ 
-        job_query: profile?.skills?.[0] || 'Software Developer', 
+        job_query: profile?.skills?.join() || 'Software Developer', 
         location: 'India' 
     });
     const [explanation, setExplanation] = useState({});
@@ -56,7 +54,6 @@ const JobsPage = () => {
         const toastId = toast.loading('AI agent is analyzing the match...');
         try {
             const response = await api.post('/jobs/explain-match', { job_details: job });
-            // Use marked to parse the markdown response into HTML
             const htmlExplanation = marked.parse(response.data.explanation);
             setExplanation(prev => ({ ...prev, [job.id]: htmlExplanation }));
             toast.success('Explanation generated!', { id: toastId });

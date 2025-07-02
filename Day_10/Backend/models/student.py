@@ -28,7 +28,6 @@ class StudentProfile(Document):
     class Settings:
         name = "student_profiles"
 
-# Pydantic models for API data validation
 class StudentProfileBase(BaseModel):
     """Base Pydantic model for profile data."""
     name: str
